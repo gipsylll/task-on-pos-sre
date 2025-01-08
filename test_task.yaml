@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-web-app
+  labels:
+    app: my-web-app
+spec:
+  replicas: 4  # Устанавливаем начальное количество реплик на основе результатов нагрузочного тестирования, чтобы обеспечить необходимую производительность в пиковые часы.
+  selector:
+    matchLabels:
+      app: my-web-app
+  template:
+    metadata:
+      labels:
+        app: my-web-app
+    spec:
+      containers:
+      - name: my-web-app-container
+        image: my-web-app:latest  # Указываем образ приложения, который будет развернут.
+        resources:
+          requests:
+            cpu: "500m"  # Запрос на CPU для инициализации приложения, чтобы гарантировать достаточные ресурсы в начале.
+            memory: "128Mi"  # Запрос на память, соответствующий постоянному потреблению приложения.
+          limits:
+            cpu: "1"  # Устанавливаем лимит на CPU, чтобы предотвратить чрезмерное использование ресурсов в случае ошибок или утечек.
+            memory: "128Mi"  # Лимит на память, чтобы избежать ситуации, когда приложение потребляет больше ресурсов, чем необходимо.
+        readinessProbe:  # Проверка готовности пода, чтобы Kubernetes знал, когда под готов к обслуживанию запросов.
+          httpGet:
+            path: /health  # Путь для проверки готовности приложения.
+            port: 80  # Порт, на котором приложение слушает.
+          initialDelaySeconds: 10  # Задержка перед первой проверкой готовности, чтобы дать приложению время на инициализацию.
+          periodSeconds: 5  # Период проверки готовности.
+        livenessProbe:  # Проверка живости пода, чтобы Kubernetes мог перезапустить под в случае его зависания.
+          httpGet:
+            path: /health  # Путь для проверки живости приложения.
+            port: 80  # Порт, на котором приложение слушает.
+          initialDelaySeconds: 30  # Задержка перед первой проверкой живости, чтобы дать приложению время на инициализацию.
+          periodSeconds: 10  # Период проверки живости.
+      affinity:  # Настройка для распределения подов по узлам, чтобы повысить отказоустойчивость.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - my-web-app
+            topologyKey: "kubernetes.io/hostname"  # Обеспечивает размещение подов на разных узлах, минимизируя риск одновременного выхода из строя нескольких подов.
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-web-app-service
+spec:
+  type: ClusterIP  # Используем ClusterIP для внутреннего доступа к приложению, так как оно не должно быть доступно извне.
+  ports:
+  - port: 80  # Порт, по которому сервис будет доступен внутри кластера.
+    targetPort: 80  # Порт, на который будет направлен трафик к контейнеру.
+  selector:
+    app: my-web-app  # Селектор для связывания сервиса с подами приложения.
+
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: my-web-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: my-web-app  # Указываем, к какому деплойменту будет применяться HPA.
+  minReplicas: 2  # Минимальное количество реплик для обеспечения отказоустойчивости в ночное время, когда нагрузка ниже.
+  maxReplicas: 10  # Максимальное количество реплик для обработки пиковых нагрузок в дневное время.
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50  # Автоматическое масштабирование при использовании CPU более 50%, что позволяет динамически адаптироваться к изменению нагрузки.
